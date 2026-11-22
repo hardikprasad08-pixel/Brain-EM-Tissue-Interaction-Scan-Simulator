@@ -1,0 +1,217 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brain EM Tissue-Interaction Scan Simulator</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0f14;--pn:#131a22;--tx:#d9e1ea;--mu:#8795a6;--ac:#4aa3ff;--bd:#263140;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font:12px/1.45 system-ui,Segoe UI,sans-serif}
+#top{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid var(--bd)}#top b{font-size:14px;margin-right:8px}
+button,select{background:var(--pn);color:var(--tx);border:1px solid var(--bd);border-radius:4px;padding:4px 9px;cursor:pointer;font-size:12px}button.go{background:var(--ac);color:#04121f;font-weight:700}
+#app{display:grid;grid-template-columns:230px minmax(0,1fr) 300px;gap:8px;padding:8px}@media(max-width:1000px){#app{grid-template-columns:1fr}}
+.pn{background:var(--pn);border:1px solid var(--bd);border-radius:6px;padding:8px}h4{margin:6px 0 3px;color:var(--mu);font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.06em}
+.sl{display:grid;grid-template-columns:92px 1fr 44px;gap:4px;align-items:center}.sl input{width:100%}.sl span:last-child{text-align:right;color:var(--mu)}
+#cv{width:100%;height:520px;display:block;background:#0a0e13;border-radius:4px;touch-action:none}
+#st{position:absolute;left:10px;top:10px;color:#fff;background:rgba(0,0,0,.5);padding:3px 8px;border-radius:3px}.wrap{position:relative}
+.r div{display:flex;justify-content:space-between;border-bottom:1px solid var(--bd);padding:1px 0}.r b{font-family:ui-monospace,monospace;font-weight:600}
+.sv{display:grid;grid-template-columns:1fr 1fr;gap:4px}.sv canvas{width:100%;background:#000;border:1px solid var(--bd);cursor:crosshair}.sv .c{position:relative}.sv label{position:absolute;left:3px;top:1px;color:#8fd;font-size:10px}
+.ch{height:210px;position:relative}.dis{color:#e8b04a;font-size:11px}label.k{display:block}
+</style></head><body>
+<div id="top"><b>Brain EM Tissue-Interaction Simulator</b>
+<button class="go" id="scan">START BRAIN SCAN</button><label><input type="checkbox" id="tOn" checked> Tumour present</label>
+<button id="layers">EXPLORE HEAD LAYERS</button><button id="reset">Reset</button>
+<span class="dis">EDUCATIONAL SIMULATION — NOT FOR CLINICAL DIAGNOSIS</span></div>
+<div id="app">
+<div class="pn" id="ctl"><h4>Tumour</h4><div id="c1"></div><label class="k">Location <select id="loc"></select></label><label class="k"><input type="checkbox" id="edema" checked> Edema</label>
+<h4>EM scan</h4><div id="c2"></div><h4>Tissue thickness (mm)</h4><div id="c3"></div>
+<h4>View</h4><div id="c4"></div><label class="k"><input type="checkbox" id="cut"> Cutaway (clip plane)</label><label class="k"><input type="checkbox" id="pl" checked> Slice planes</label><label class="k"><input type="checkbox" id="bm" checked> E / H field</label>
+<div><button data-cam="human">Human</button> <button data-cam="head">Head</button> <button data-cam="brain">Brain</button> <button data-cam="tum">Tumour</button> <button data-cam="top">Axial</button> <button data-cam="side">Sagittal</button> <button data-cam="front">Coronal</button></div>
+<h4>Tissue data (editable in code: T)</h4><div class="dis" style="color:var(--mu)">Simplified procedural anatomy (no external mesh could be loaded). εr, σ are frequency-independent educational values.</div></div>
+<div><div class="pn wrap"><canvas id="cv"></canvas><div id="st">Ready</div></div>
+<div class="pn" style="margin-top:8px"><select id="gm"><option value="E">|E| vs depth</option><option value="A">Attenuation vs depth</option><option value="G">Reflection vs depth</option><option value="P">εr, σ vs depth</option></select><div class="ch"><canvas id="gc"></canvas></div></div></div>
+<div><div class="pn"><h4>Slices — SIMULATED IMAGE (synthetic, not a real scan)</h4><div class="sv"><div class="c"><label>AXIAL</label><canvas id="sa" width="160" height="160"></canvas></div><div class="c"><label>SAGITTAL</label><canvas id="ss" width="160" height="160"></canvas></div><div class="c"><label>CORONAL</label><canvas id="sc" width="160" height="160"></canvas></div><div><div id="c5"></div></div></div></div>
+<div class="pn r" style="margin-top:8px"><h4>Physics-based simulated tissue analysis</h4><div id="res"></div></div></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $=i=>document.getElementById(i),V3=(a,b,c)=>new THREE.Vector3(a,b,c);
+// ---- complex math ----
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1]],sub=(a,b)=>[a[0]-b[0],a[1]-b[1]],mul=(a,b)=>[a[0]*b[0]-a[1]*b[1],a[0]*b[1]+a[1]*b[0]],sc=(a,s)=>[a[0]*s,a[1]*s],ab=a=>Math.hypot(a[0],a[1]);
+const dv=(a,b)=>{const d=b[0]*b[0]+b[1]*b[1];return[(a[0]*b[0]+a[1]*b[1])/d,(a[1]*b[0]-a[0]*b[1])/d]};
+const sq=a=>{const r=ab(a);return[Math.sqrt((r+a[0])/2),(a[1]<0?-1:1)*Math.sqrt(Math.max(0,(r-a[0])/2))]};
+const ex=a=>{const e=Math.exp(a[0]);return[e*Math.cos(a[1]),e*Math.sin(a[1])]};
+const ch=a=>sc(add(ex(a),ex(sc(a,-1))),.5),sh=a=>sc(sub(ex(a),ex(sc(a,-1))),.5);
+// ---- tissue data (editable) ----
+const T={skin:{n:'Skin',e:40,s:.9,r:1100,mu:1},fat:{n:'Fat',e:5.5,s:.05,r:920,mu:1},skull:{n:'Skull',e:12,s:.15,r:1900,mu:1},csf:{n:'CSF',e:68,s:2.4,r:1010,mu:1},grey:{n:'Grey matter',e:52,s:.95,r:1040,mu:1},white:{n:'White matter',e:38,s:.6,r:1040,mu:1},tum:{n:'Tumour',e:60,s:1.4,r:1050,mu:1}};
+const COL={skin:'#e0a98a',fat:'#f0dc80',skull:'#cfc9b8',csf:'#5ab4e8',grey:'#a58fa8',white:'#e6e1ec',tum:'#f08030'};
+const MU=4e-7*Math.PI,E0P=8.854e-12,C0=299792458,ETA0=376.73;
+// ---- sliders ----
+const P={};
+function mk(host,defs){$(host).innerHTML=defs.map(d=>`<div class="sl"><span>${d[1]}</span><input type="range" id="${d[0]}" min="${d[2]}" max="${d[3]}" step="${d[4]}" value="${d[5]}"><span id="v_${d[0]}"></span></div>`).join('');defs.forEach(d=>$(d[0]).oninput=()=>upd(d[0]))}
+mk('c1',[['tr','Size (mm)',4,25,1,12],['dp','Depth (mm)',5,55,1,30]]);
+mk('c2',[['f','log f (MHz)',1,4,.01,2.95],['E0','E₀ (V/m)',1,100,1,10],['G','Tissue gain',1,20,1,1]]);
+mk('c3',[['skin','Skin',.5,6,.1,2],['fat','Fat',0,10,.1,3],['skull','Skull',2,12,.1,6],['csf','CSF',.5,8,.1,3],['grey','Grey matter',1,10,.1,4]]);
+mk('c4',[['tp','Head transp.',0,1,.01,0],['cx','Clip plane x',-8,8,.1,0]]);
+mk('c5',[['ya','Axial y',-13,10,.1,0],['xs','Sagittal x',-8,8,.1,0],['zc','Coronal z',-10,10,.1,0]]);
+const LOC={Frontal:[.3,.35,.9],Temporal:[1,-.25,.15],Parietal:[.4,.9,-.4],Occipital:[.2,.2,-1],Cerebellar:[.3,-.6,-.8],'Deep central':[1,.2,.1]};
+$('loc').innerHTML=Object.keys(LOC).map(k=>`<option>${k}</option>`).join('');$('loc').value='Temporal';
+// ---- anatomy (cm) ----
+const AX=[7.5,8.2,9.2];let BX=[6.1,6.8,7.8];
+const nz=(x,y,z)=>(Math.sin(7*x+3*y+1)*Math.sin(8*y+2*z)+Math.sin(9*z+x)*Math.sin(6*x-4*y+2)+Math.sin(11*y-5*x)*Math.sin(7*z+3))/3;
+const brainR=(d0,d1,d2)=>1+.06*nz(d0*4.5,d1*4.5,d2*4.5)-(d1>-.25?.28*Math.exp(-((d0/.07)**2)):0);
+function brain(x,y,z){const q0=x/BX[0],q1=y/BX[1],q2=z/BX[2],g=Math.hypot(q0,q1,q2);if(g>1.2)return-1;if(g<1e-6)return 5;return(brainR(q0/g,q1/g,q2/g)-g)*6}
+let TU={c:[0,0,0],R:1.2,u:[1,0,0],on:true};
+const rt=(dx,dy,dz)=>{const r=Math.hypot(dx,dy,dz)||1;return TU.R*(1+.28*nz(dx/r*2.3+3,dy/r*2.3,dz/r*2.3))};
+// intensity 0..1 (T1-like), -1 = air
+function cls(x,y,z){const A=AX,g0=Math.hypot(x/A[0],y/A[1],z/A[2]);let dc=-1;
+ if(g0<1){const gr=Math.hypot(x/(A[0]*A[0]),y/(A[1]*A[1]),z/(A[2]*A[2]));dc=gr<1e-6?7:(1-g0)*g0/gr}
+ if(dc<0){if((x/5.6)**2+((y+6.8)/6.4)**2+((z-3)/6.2)**2<1)return.5;if(y<-8&&y>-16&&x*x+z*z<10.5)return.45;if(y<-15&&y>-22&&Math.abs(x)<14&&Math.abs(z)<7)return.45;return-1}
+ const s=P.skin/10,f=s+P.fat/10,k=f+P.skull/10;if(dc<s)return.55;if(dc<f)return.85;if(dc<k)return.12;
+ if(TU.on){const dx=x-TU.c[0],dy=y-TU.c[1],dz=z-TU.c[2],r=Math.hypot(dx,dy,dz),t=rt(dx,dy,dz);if(r<t){const p=r/t;return p<.45?.25+.1*nz(x*3,y*3,z*3):.8}
+  if($('edema').checked&&r<1.7*t&&brain(x,y,z)>0)return.22}
+ if((Math.abs(x)-1)**2/.36+((y-1.3)/1)**2+((z-.3)/2.4)**2<1)return.05;
+ const bd=brain(x,y,z);if(bd>0){const n=.05*nz(x*1.7,y*1.7,z*1.7);return(bd<P.grey/10?.45:.7)+n}
+ if((x/3)**2+((y+4.6)/1.9)**2+((z+5.2)/2.4)**2<1)return.52+.08*Math.sin(25*y);
+ if((x/1.1)**2+((y+3.9)/2.6)**2+((z+1.2)/1.1)**2<1)return.68;return.05}
+// ---- EM solver (mm) ----
+function stack(inc){const L=[['skin',P.skin],['fat',P.fat],['skull',P.skull],['csf',P.csf],['grey',P.grey]],g=P.grey,R=P.tr,B=P.skin+P.fat+P.skull+P.csf,D=Math.max(P.dp,g+R);
+ if(inc){if(D-R-g>1e-6)L.push(['white',D-R-g]);L.push(['tum',2*R])}L.push(['white',400]);return{L:L.filter(l=>l[1]>1e-6).map(l=>({k:l[0],d:l[1]})),B,Dc:B+D}}
+function solve(fM,inc){const w=2*Math.PI*fM*1e6,S=stack(inc),L=S.L,N=L.length;
+ L.forEach((l,i)=>{const t=Object.assign({},T[l.k]);if(l.k==='tum'){t.e=P.te;t.s=P.ts}l.t=t;const ec=[t.e*E0P,-t.s/w];l.g=sq([-w*w*MU*ec[0],w*MU*t.s]);l.eta=sq(dv([MU,0],ec));l.dm=l.d*1e-3;l.last=i===N-1});
+ for(let i=N-1;i>=0;i--){const l=L[i];if(l.last){l.zin=l.eta;continue}const gd=sc(l.g,l.dm),c=ch(gd),s=sh(gd),Zl=L[i+1].zin;l.zin=mul(l.eta,dv(add(mul(Zl,c),mul(l.eta,s)),add(mul(l.eta,c),mul(Zl,s))))}
+ const Gam=dv(sub(L[0].zin,[ETA0,0]),add(L[0].zin,[ETA0,0]));let Vv=add([1,0],Gam),z0=0;
+ L.forEach((l,i)=>{l.st=z0;z0+=l.d;l.Vt=Vv;l.It=dv(Vv,l.zin);if(!l.last){const gd=sc(l.g,l.dm);Vv=sub(mul(Vv,ch(gd)),mul(mul(l.It,l.eta),sh(gd)))}
+  const pe=i?L[i-1].eta:[ETA0,0];l.gl=ab(dv(sub(l.eta,pe),add(l.eta,pe)))});
+ const k0=w/C0;
+ function field(d){if(d<0){const a=ex([0,-k0*d*1e-3]),r=mul(Gam,ex([0,k0*d*1e-3]));return{V:add(a,r),I:sc(sub(a,r),1/ETA0)}}
+  let l=L[N-1];for(const q of L)if(d<q.st+q.d){l=q;break}const z=(d-l.st)*1e-3;
+  if(l.last){const Vz=mul(l.Vt,ex(sc(l.g,-z)));return{V:Vz,I:dv(Vz,l.eta),l}}
+  const gz=sc(l.g,z),c=ch(gz),s=sh(gz);return{V:sub(mul(l.Vt,c),mul(mul(l.It,l.eta),s)),I:sub(mul(l.It,c),mul(dv(l.Vt,l.eta),s)),l}}
+ return{L,S,Gam,R:ab(Gam)**2,field}}
+const avgSAR=(r,a,b)=>{let s=0;for(let i=0;i<=10;i++){const f=r.field(a+(b-a)*i/10),E=ab(f.V)*P.E0;s+=f.l.t.s*E*E/(2*f.l.t.r)}return s/11};
+// ---- state & measurement ----
+let RA,RB,PF=[],MEAS={};
+function geom(){const tot=P.skin+P.fat+P.skull+P.csf;BX=AX.map(a=>a-tot/10);
+ const u0=LOC[$('loc').value],n=Math.hypot(...u0),u=u0.map(v=>v/n);let Lb=0;while(Lb<12&&brain(u[0]*Lb,u[1]*Lb,u[2]*Lb)>0)Lb+=.02;
+ const s=Math.max(.2,Lb-P.dp/10);TU={c:u.map(v=>v*s),R:P.tr/10,u,on:$('tOn').checked};
+ let mn=[9,9,9],mx=[-9,-9,-9],cnt=0;const N=26,h=TU.R*1.4,dx=2*h/N;for(let i=0;i<N;i++)for(let j=0;j<N;j++)for(let k=0;k<N;k++){const p=[-h+dx*(i+.5),-h+dx*(j+.5),-h+dx*(k+.5)];if(Math.hypot(...p)<rt(...p)){cnt++;for(let a=0;a<3;a++){mn[a]=Math.min(mn[a],p[a]-dx/2);mx[a]=Math.max(mx[a],p[a]+dx/2)}}}
+ MEAS={x:(mx[0]-mn[0])*10,y:(mx[1]-mn[1])*10,z:(mx[2]-mn[2])*10,v:cnt*dx**3}}
+const f3=(x,n=3)=>!isFinite(x)?'—':Math.abs(x)>=1e4||(Math.abs(x)<.01&&x!==0)?x.toExponential(2):x.toFixed(n);
+let Chrt,band={id:'b',beforeDatasetsDraw(c){const L=c.$L;if(!L)return;const x=c.scales.x,a=c.chartArea,g=c.ctx;L.forEach(l=>{const x0=x.getPixelForValue(l.st),x1=x.getPixelForValue(l.last?l.st+80:l.st+l.d);g.save();g.globalAlpha=.25;g.fillStyle=COL[l.k];g.fillRect(Math.max(a.left,x0),a.top,Math.max(0,Math.min(a.right,x1)-Math.max(a.left,x0)),a.bottom-a.top);g.restore()})}};
+function chart(){const L=RA.L,m=$('gm').value,ds=[];let pf=[];
+ L.forEach(l=>{const n=l.last?50:20,len=l.last?80:l.d;for(let j=0;j<=n;j++){const d=l.st+len*j/n,f=RA.field(d);pf.push({d,E:ab(f.V)*P.E0,l})}});
+ const E0=pf[0].E;
+ if(m==='E')ds.push({label:'|E| (V/m)',data:pf.map(p=>({x:p.d,y:p.E})),borderColor:'#4aa3ff'});
+ if(m==='A')ds.push({label:'Cumulative loss vs skin surface (dB)',data:pf.map(p=>({x:p.d,y:20*Math.log10(E0/Math.max(p.E,1e-12))})),borderColor:'#e8b04a'});
+ if(m==='G'){const a=[];L.forEach(l=>{a.push({x:l.st-.001,y:0},{x:l.st,y:l.gl},{x:l.st+.001,y:0})});ds.push({label:'|Γ| at interface',data:a,borderColor:'#ff6a5a',stepped:false})}
+ if(m==='P'){const e=[],s=[];L.forEach(l=>{const q=l.last?l.st+80:l.st+l.d;e.push({x:l.st,y:l.t.e},{x:q,y:l.t.e});s.push({x:l.st,y:l.t.s*40},{x:q,y:l.t.s*40})});ds.push({label:'εr',data:e,borderColor:'#4aa3ff'},{label:'σ × 40 (S/m)',data:s,borderColor:'#7fd18b'})}
+ ds.forEach(d=>{d.pointRadius=0;d.borderWidth=2});Chrt.data.datasets=ds;Chrt.$L=L;Chrt.update('none')}
+function upd(src){
+ $('v_f').textContent=Math.pow(10,+$('f').value).toFixed(0)+' MHz';
+ ['tr','dp','E0','G','skin','fat','skull','csf','grey','tp','cx','ya','xs','zc'].forEach(k=>{P[k]=+$(k).value;if(k!=='f'&&$('v_'+k))$('v_'+k).textContent=P[k]});
+ P.f=+$('f').value;P.te=60;P.ts=1.4;geom();
+ const fM=Math.pow(10,P.f);RA=solve(fM,TU.on);RB=solve(fM,false);
+ const thick=['skin','fat','skull','csf','grey','cx'].includes(src)||!src;if(thick||['tr','dp','loc','tOn','edema'].includes(src)||!src)buildMeshes();
+ applyMat();chart();slices();results(fM);planes()}
+// ---- results ----
+function results(fM){const A=RA,B=RB,Dc=A.S.Dc,R=P.tr,fa=A.field(Dc),fb=B.field(Dc);const Ea=ab(fa.V)*P.E0,Eb=ab(fb.V)*P.E0;
+ const sA=avgSAR(A,Dc-R,Dc+R),sB=avgSAR(B,Dc-R,Dc+R),dR=Math.abs(A.R-B.R),dT=dR,att=20*Math.log10(Eb/Math.max(Ea,1e-12)),w=T.white;
+ const terms=[['Δεr',Math.abs(P.te-w.e)/w.e],['Δσ',Math.abs(P.ts-w.s)/w.s],['Δ|E|',Math.abs(Ea-Eb)/Eb],['ΔSAR',Math.abs(sA-sB)/sB]].map(t=>[t[0],Math.min(1,t[1])]);
+ const idx=terms.reduce((a,t)=>a+t[1],0)/terms.length,top=terms.slice().sort((a,b)=>b[1]-a[1]).slice(0,2).map(t=>t[0]).join(', ');
+ const L=A.L.find(l=>l.k==='tum'),R0=A.L[0];
+ const rows=[['Region',$('loc').value],['Surface→tumour (depth)',f3(P.dp,0)+' mm'],['Tumour L×W×H',TU.on?`${f3(MEAS.x,0)}×${f3(MEAS.z,0)}×${f3(MEAS.y,0)} mm`:'—'],['Volume',TU.on?f3(MEAS.v,2)+' cm³':'—'],
+ ['Frequency',f3(fM,0)+' MHz'],['λ white matter',f3(2*Math.PI/A.L[A.L.length-1].g[1]*1e3,1)+' mm'],['δ white matter',f3(1e3/A.L[A.L.length-1].g[0],1)+' mm'],
+ ['Reflectance healthy / tumour',f3(B.R)+' / '+f3(A.R)],['Δ reflection',f3(dR,4)],['Δ transmission',f3(dT,4)],['|E| at site healthy / tumour',f3(Eb)+' / '+f3(Ea)+' V/m'],['Δ attenuation at site',f3(att,2)+' dB'],
+ ['Mean SAR healthy / tumour',f3(sB)+' / '+f3(sA)+' W/kg'],['Tumour |Γ| (white→tum)',L?f3(L.gl):'—'],['Tumour |η| vs white',L?f3(ab(L.eta),1)+' / '+f3(ab(A.L[A.L.length-1].eta),1)+' Ω':'—'],
+ ['EM contrast index (0–1)',TU.on?f3(idx):'0 (no tumour)'],['Dominant terms',TU.on?top:'—'],['Status',TU.on?'Predefined simulated abnormal region (SIMULATED)':'Healthy model']];
+ $('res').innerHTML=rows.map(r=>`<div><span>${r[0]}</span><b>${r[1]}</b></div>`).join('')+'<div style="color:var(--mu);margin-top:4px">Index = mean of capped relative differences (Δεr, Δσ, Δ|E|, ΔSAR) vs healthy white matter / healthy stack. Not a clinical probability. Physics-based simulated tissue analysis; no AI model.</div>'}
+// ---- slices ----
+const cv2={a:document.createElement('canvas'),s:document.createElement('canvas'),c:document.createElement('canvas')};Object.values(cv2).forEach(c=>c.width=c.height=160);
+const NS=160;
+function sliceImg(v){const c=cv2[v],g=c.getContext('2d'),im=g.createImageData(NS,NS),d=im.data;
+ for(let j=0;j<NS;j++)for(let i=0;i<NS;i++){let x,y,z;const a=i/(NS-1),b=j/(NS-1);
+  if(v==='a'){x=-12+24*a;z=12-24*b;y=P.ya}else if(v==='s'){z=12-24*a;y=11-24*b;x=P.xs}else{x=-12+24*a;y=11-24*b;z=P.zc}
+  const q=cls(x,y,z),o=(j*NS+i)*4;if(q<0){d[o+3]=0;continue}const t=Math.max(0,Math.min(1,q))*255;d[o]=d[o+1]=d[o+2]=t;d[o+3]=255}
+ g.putImageData(im,0,0)}
+function slices(){['a','s','c'].forEach(v=>{sliceImg(v);const id={a:'sa',s:'ss',c:'sc'}[v],c=$(id),g=c.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,160,160);g.drawImage(cv2[v],0,0);
+  const pos={a:[(P.xs+12)/24,(12-P.zc)/24],s:[(12-P.zc)/24,(11-P.ya)/24],c:[(P.xs+12)/24,(11-P.ya)/24]}[v];g.strokeStyle='#4aa3ff';g.beginPath();g.moveTo(pos[0]*NS,0);g.lineTo(pos[0]*NS,NS);g.moveTo(0,pos[1]*NS);g.lineTo(NS,pos[1]*NS);g.stroke();
+  g.fillStyle='#8fd';g.font='9px sans-serif';g.fillText('SIMULATED IMAGE',4,154);if(TU.on&&near(v)){g.strokeStyle='#ffb050';g.strokeRect(2,2,NS-4,NS-4)}});
+ if(tex)Object.values(tex).forEach(t=>t.needsUpdate=true)}
+const near=v=>{const c=TU.c,r=TU.R*1.3;return v==='a'?Math.abs(P.ya-c[1])<r:v==='s'?Math.abs(P.xs-c[0])<r:Math.abs(P.zc-c[2])<r};
+[['sa','a'],['ss','s'],['sc','c']].forEach(([id,v])=>$(id).onclick=e=>{const r=$(id).getBoundingClientRect(),a=(e.clientX-r.left)/r.width,b=(e.clientY-r.top)/r.height;
+ if(v==='a'){$('xs').value=-12+24*a;$('zc').value=12-24*b}else if(v==='s'){$('zc').value=12-24*a;$('ya').value=11-24*b}else{$('xs').value=-12+24*a;$('ya').value=11-24*b}upd('ya')});
+// ---- 3D ----
+let scene,cam,rend,body,mats={},meshes={},tex,pl={},eL,hL,kA,az=.5,el=.15,dist=62,tgt=V3(0,-6,0),gaz=az,gel=el,gd=dist,gt=tgt.clone(),clip=new THREE.Plane(V3(-1,0,0),1e3),NP=260,Ept=[],Ipt=[];
+function ell(a,col,seg=48){const g=new THREE.SphereGeometry(1,seg,seg*.7);g.scale(a[0],a[1],a[2]);return g}
+function init(){rend=new THREE.WebGLRenderer({canvas:$('cv'),antialias:true});rend.localClippingEnabled=false;rend.clippingPlanes=[clip];scene=new THREE.Scene();scene.background=new THREE.Color(0x0a0e13);cam=new THREE.PerspectiveCamera(38,1,.1,400);
+ scene.add(new THREE.HemisphereLight(0xffffff,0x334455,.9));const dl=new THREE.DirectionalLight(0xffffff,.8);dl.position.set(20,30,40);scene.add(dl);
+ mats.skin=new THREE.MeshPhongMaterial({color:0xdba88a,shininess:12,transparent:true});mats.skull=new THREE.MeshPhongMaterial({color:0xe3dcc8,transparent:true,shininess:30});
+ mats.csf=new THREE.MeshPhongMaterial({color:0x5ab4e8,transparent:true,opacity:.1,depthWrite:false});mats.brain=new THREE.MeshPhongMaterial({vertexColors:true,shininess:25});
+ mats.tum=new THREE.MeshPhongMaterial({vertexColors:true,transparent:true,opacity:.85,emissive:0x331100});mats.ed=new THREE.MeshPhongMaterial({color:0xd8e060,transparent:true,opacity:.18,depthWrite:false});
+ const mk=c=>{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(NP*3),3));const l=new THREE.Line(g,new THREE.LineBasicMaterial({color:c}));l.frustumCulled=false;scene.add(l);return l};eL=mk(0x4aa3ff);hL=mk(0xff5a4a);
+ kA=new THREE.ArrowHelper(V3(0,0,1),V3(0,0,0),5,0xffd23f);scene.add(kA);
+ tex={};const mp=(v,w,h,rot)=>{const t=new THREE.CanvasTexture(cv2[v]);tex[v]=t;const g=new THREE.PlaneGeometry(24,24);rot(g);const m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({map:t,transparent:true,opacity:.92,side:THREE.DoubleSide}));scene.add(m);pl[v]=m};
+ mp('a',0,0,g=>g.rotateX(Math.PI/2));mp('s',0,0,g=>g.rotateY(Math.PI/2));mp('c',0,0,g=>{});
+ let dr=false,px,py,mv=0;const cv=$('cv');cv.onpointerdown=e=>{dr=true;mv=0;px=e.clientX;py=e.clientY;cv.setPointerCapture(e.pointerId)};
+ cv.onpointerup=e=>{dr=false;if(mv<4)pick(e)};cv.onpointermove=e=>{if(!dr)return;mv+=Math.abs(e.clientX-px)+Math.abs(e.clientY-py);gaz=az-=(e.clientX-px)*.008;gel=el=Math.max(-1.4,Math.min(1.4,el+(e.clientY-py)*.008));px=e.clientX;py=e.clientY};
+ cv.onwheel=e=>{e.preventDefault();gd=dist=Math.max(5,Math.min(120,dist*(1+e.deltaY*.001)))};
+ Chart.defaults.color='#8795a6';Chart.defaults.borderColor='rgba(128,128,128,.2)';
+ Chrt=new Chart($('gc'),{type:'line',plugins:[band],data:{datasets:[]},options:{parsing:false,animation:false,maintainAspectRatio:false,scales:{x:{type:'linear',title:{display:true,text:'depth from skin surface (mm)'}}}}});}
+function pick(e){if(!meshes.tum||!TU.on)return;const r=$('cv').getBoundingClientRect(),m=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1),rc=new THREE.Raycaster();rc.setFromCamera(m,cam);
+ if(rc.intersectObject(meshes.tum).length){$('xs').value=TU.c[0];$('ya').value=TU.c[1];$('zc').value=TU.c[2];upd('ya');camTo('tum')}}
+function buildMeshes(){Object.values(meshes).forEach(m=>{scene.remove(m);m.geometry&&m.geometry.dispose()});meshes={};if(body){scene.remove(body)}
+ const inset=(P.skin+P.fat)/10;body=new THREE.Group();const sk=(g,x,y,z)=>{const m=new THREE.Mesh(g,mats.skin);m.position.set(x,y,z);body.add(m);return m};
+ sk(ell(AX),0,0,0);sk(ell([5.6,6.4,6.2]),0,-6.8,3);const nose=new THREE.Mesh(new THREE.ConeGeometry(1,3.2,16),mats.skin);nose.rotation.x=Math.PI/2+.25;nose.position.set(0,-4.7,9.4);body.add(nose);
+ sk(ell([.8,2,1.3],0,12),7.4,-1.8,.5);sk(ell([.8,2,1.3],0,12),-7.4,-1.8,.5);
+ const eye=new THREE.MeshPhongMaterial({color:0x222222});[-2.2,2.2].forEach(x=>{const e=new THREE.Mesh(ell([.6,.4,.3],0,12),eye);e.position.set(x,-2.6,8.5);body.add(e)});
+ const neck=new THREE.Mesh(new THREE.CylinderGeometry(3.3,3.8,9,32),mats.skin);neck.position.y=-14;body.add(neck);
+ const sh=new THREE.Mesh(ell([15,6,7.5]),mats.skin);sh.position.y=-20;body.add(sh);const tr=new THREE.Mesh(new THREE.CylinderGeometry(11,12,16,32),mats.skin);tr.position.y=-30;body.add(tr);scene.add(body);
+ meshes.skull=new THREE.Mesh(ell(AX.map(a=>a-inset),0,40),mats.skull);meshes.skull.scale.set(1,1,1);scene.add(meshes.skull);
+ meshes.csf=new THREE.Mesh(ell(BX.map(b=>b*1.05)),mats.csf);scene.add(meshes.csf);
+ // brain with gyri
+ const bg=new THREE.SphereGeometry(1,112,80),pos=bg.attributes.position,col=new Float32Array(pos.count*3);
+ for(let i=0;i<pos.count;i++){const d0=pos.getX(i),d1=pos.getY(i),d2=pos.getZ(i),r=brainR(d0,d1,d2);pos.setXYZ(i,d0*r*BX[0],d1*r*BX[1],d2*r*BX[2]);const k=Math.max(.45,Math.min(1,.72+4*(r-1)));col[i*3]=.86*k;col[i*3+1]=.62*k;col[i*3+2]=.64*k}
+ bg.setAttribute('color',new THREE.BufferAttribute(col,3));bg.computeVertexNormals();meshes.brain=new THREE.Mesh(bg,mats.brain);scene.add(meshes.brain);
+ const cb=new THREE.SphereGeometry(1,40,28),cp=cb.attributes.position;for(let i=0;i<cp.count;i++){const s=1+.05*Math.sin(28*cp.getY(i));cp.setXYZ(i,cp.getX(i)*3*s,cp.getY(i)*1.9*s,cp.getZ(i)*2.4*s)}cb.computeVertexNormals();
+ const cm=new THREE.Mesh(cb,new THREE.MeshPhongMaterial({color:0xb08a8a}));cm.position.set(0,-4.6,-5.2);scene.add(cm);meshes.cer=cm;
+ const st=new THREE.Mesh(ell([1.1,2.6,1.1]),new THREE.MeshPhongMaterial({color:0xd0b0a8}));st.position.set(0,-3.9,-1.2);scene.add(st);meshes.stem=st;
+ // irregular tumour + edema
+ const mkT=(sc,mat)=>{const g=new THREE.IcosahedronGeometry(1,5),p=g.attributes.position,c=new Float32Array(p.count*3);for(let i=0;i<p.count;i++){const x=p.getX(i),y=p.getY(i),z=p.getZ(i),r=rt(x,y,z)*sc;p.setXYZ(i,x*r,y*r,z*r);const h=.5+.5*nz(x*6,y*6,z*6);c[i*3]=.95;c[i*3+1]=.35+.3*h;c[i*3+2]=.1}g.setAttribute('color',new THREE.BufferAttribute(c,3));g.computeVertexNormals();const m=new THREE.Mesh(g,mat);m.position.set(...TU.c);scene.add(m);return m};
+ if(TU.on){meshes.tum=mkT(1,mats.tum);if($('edema').checked)meshes.ed=mkT(1.7,mats.ed);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(TU.R*1.9,.05,8,48),new THREE.MeshBasicMaterial({color:0xffb050}));ring.position.set(...TU.c);ring.lookAt(cam.position);scene.add(ring);meshes.ring=ring}
+ // EM ray geometry
+ const u=V3(...TU.u),entry=V3(...TU.c).add(u.clone().multiplyScalar((RA.S.Dc-(P.skin+P.fat+P.skull+P.csf)+(P.skin+P.fat+P.skull+P.csf))/10-(P.dp/10)+(P.dp/10)));
+ rayO=V3(...TU.c).add(u.clone().multiplyScalar(RA.S.Dc/10-RA.S.Dc/10+(RA.S.Dc)/10));rayU=u;
+ const e1=Math.abs(u.y)<.9?V3(0,1,0).cross(u).normalize():V3(1,0,0).cross(u).normalize();rayE=e1;rayH=u.clone().cross(e1);
+ kA.position.copy(rayO.clone().add(u.clone().multiplyScalar(14)));kA.setDirection(u.clone().negate());
+ Ept=[];Ipt=[];for(let i=0;i<NP;i++){const d=-120+(RA.S.Dc+30+120)*i/(NP-1),f=RA.field(d);Ept.push(f.V);Ipt.push(f.I)}}
+let rayO,rayU,rayE,rayH;
+function applyMat(){const t=P.tp;mats.skin.opacity=1-t*.9;mats.skull.opacity=Math.min(1,Math.max(.15,1-t*.85));mats.skin.depthWrite=t<.1;
+ clip.constant=$('cut').checked?P.cx:1e3;if(meshes.csf)meshes.csf.visible=true;const pe=$('pl').checked;Object.values(pl).forEach(m=>m.visible=pe);}
+function planes(){if(!pl.a)return;pl.a.position.set(0,P.ya,0);pl.s.position.set(P.xs,-1,0);pl.c.position.set(0,-1,P.zc);pl.a.position.y=P.ya;pl.s.scale.set(1,1,1);}
+const CAM={human:[0,-6,0,62,.5,.15],head:[0,0,0,34,.6,.15],brain:[0,0,0,22,.8,.2],top:[0,0,0,32,0,1.4],side:[0,0,0,32,1.57,0],front:[0,0,0,32,0,0]};
+function camTo(k){const c=k==='tum'?[...TU.c,10,gaz,.2]:CAM[k];gt=V3(c[0],c[1],c[2]);gd=c[3];gaz=c[4];gel=c[5]}
+document.querySelectorAll('[data-cam]').forEach(b=>b.onclick=()=>camTo(b.dataset.cam));
+let tt=0,last=performance.now(),scanT=-1;
+function loop(){requestAnimationFrame(loop);const now=performance.now(),dt=Math.min(.1,(now-last)/1000);last=now;tt+=dt*3;
+ const cv=$('cv'),w=cv.clientWidth,h=cv.clientHeight;if(cv.width!==Math.round(w*devicePixelRatio)){rend.setPixelRatio(devicePixelRatio);rend.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}
+ if(scanT>=0)scan(dt);const k=Math.min(1,dt*3);tgt.lerp(gt,k);dist+=(gd-dist)*k;az+=(gaz-az)*k;el+=(gel-el)*k;
+ cam.position.set(tgt.x+dist*Math.cos(el)*Math.sin(az),tgt.y+dist*Math.sin(el),tgt.z+dist*Math.cos(el)*Math.cos(az));cam.lookAt(tgt);
+ if(meshes.ring){meshes.ring.lookAt(cam.position);meshes.ring.scale.setScalar(1+.08*Math.sin(tt*2))}
+ const on=$('bm').checked;eL.visible=hL.visible=kA.visible=on;
+ if(on&&Ept.length){const c=Math.cos(tt),s=Math.sin(tt),pe=eL.geometry.attributes.position.array,ph=hL.geometry.attributes.position.array;
+  for(let i=0;i<NP;i++){const d=-120+(RA.S.Dc+150)*i/(NP-1),g=d<0?1:P.G,a=1.8*g*(Ept[i][0]*c-Ept[i][1]*s),b=1.8*g*ETA0*(Ipt[i][0]*c-Ipt[i][1]*s);
+   const base=rayO.clone().sub(rayU.clone().multiplyScalar(d/10));pe[i*3]=base.x+rayE.x*a;pe[i*3+1]=base.y+rayE.y*a;pe[i*3+2]=base.z+rayE.z*a;ph[i*3]=base.x+rayH.x*b;ph[i*3+1]=base.y+rayH.y*b;ph[i*3+2]=base.z+rayH.z*b}
+  eL.geometry.attributes.position.needsUpdate=hL.geometry.attributes.position.needsUpdate=true}
+ rend.render(scene,cam)}
+// ---- cinematic scan ----
+const STG=['Scanning Head...','Analyzing Tissue Response...','Comparing Tissue Properties...','Localizing Abnormal Region...','Generating Scan Visualization...','Scan Complete'];
+function scan(dt){scanT+=dt;const t=scanT,yc=TU.c[1];let s=0;
+ if(t<2){camTo('head');s=0}else if(t<4){$('tp').value=Math.min(.85,(t-2)*.45);s=0;camTo('brain')}
+ else if(t<11){const p=(t-4)/7,e=1-Math.pow(1-p,2);$('ya').value=9-(9-yc)*e;s=p<.4?1:p<.8?2:3;gaz=az+.003}
+ else if(t<13){$('xs').value=TU.c[0];$('zc').value=TU.c[2];camTo('tum');s=4}else{s=5;scanT=-1;$('scan').textContent='START BRAIN SCAN'}
+ $('st').textContent=STG[s];upd('ya')}
+$('scan').onclick=()=>{if(scanT>=0){scanT=-1;$('scan').textContent='START BRAIN SCAN';return}$('tOn').checked=true;$('cut').checked=false;scanT=0;$('scan').textContent='STOP SCAN';$('tp').value=0;upd('tOn')};
+$('layers').onclick=()=>{$('tp').value=$('tp').value>.5?0:.85;upd('tp')};
+$('reset').onclick=()=>{location.reload()};
+['tOn','edema','loc','cut','pl','bm','gm'].forEach(id=>$(id).onchange=()=>{upd(id);if(id==='loc')camTo('brain')});
+init();upd();camTo('human');$('st').textContent='Ready — press START BRAIN SCAN';loop();
+</script></body></html>
